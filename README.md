@@ -1,32 +1,33 @@
 # dual-agent-vps
 
-Run agentic coding workflows from a hardened VPS instead of your laptop.
+A reproducible, private-by-default VPS setup for running coding agents and
+automation away from my laptop.
 
-This skill provisions a private Hetzner workbench for agentic coding and
-automation. The base layer is hardened SSH/Tailscale access, Docker, the
-`vps_ops` operator role, backups, health checks, and separated workspaces.
-Optional app and tooling profiles include Claude Code, Codex CLI, Firecrawl,
-n8n, an agent gateway, optional Cloudflare Tunnel webhook ingress, MCP tooling,
-tmux, and SSH/Tailscale-based remote development.
+I built this because I wanted an always-on environment for Codex/Claude-style
+workflows without turning a VPS into an opaque snowflake. The project focuses
+on repeatable provisioning, safe access, backups, health checks, and recovery.
 
-It is built for people who want their AI coding agents to run close to their
-servers, keep working after disconnects, and operate inside a reproducible,
-auditable, private-by-default environment.
+**Stack:** Terraform, Ansible, Docker, Tailscale, Hetzner, GitHub Actions.
 
-Under the hood it uses Terraform, Ansible, Docker Compose, system-wide
-`uv`/`uvx`, separated workbench directories, the `vps_ops` role for health
-checks, backups, release checks, and Docker cleanup, optional service
-deployments, optional Cloudflare Tunnel ingress for n8n production webhooks, and an opt-in
-NoMachine/XFCE remote desktop profile.
+The main engineering goal is simple: if the VPS disappears tomorrow, I should
+be able to rebuild it predictably and understand exactly what is exposed,
+persisted, and backed up.
 
-The base workbench installs `uv` and `uvx` system-wide by default for fast,
-isolated Python tool execution. Poetry is intentionally not a baseline package;
-install it only for repos that carry `poetry.lock` or explicitly require
-`poetry run`.
+## What I Learned / Engineering Decisions
 
-For coding agents, use `SKILL.md`.
+- **Terraform owns infrastructure; Ansible owns host configuration.** Keeping
+  that boundary explicit makes changes easier to review and recovery easier to
+  reason about.
+- **Bootstrap SSH narrowly, then move to Tailscale-only access.** Public SSH is
+  a temporary provisioning path, not the steady-state access model.
+- **Backups are only useful when they can be restored.** The backup flow includes
+  off-box verification and documented restore checks.
+- **Services stay on loopback or private networks by default.** Public ingress
+  is added only for a specific, reviewed use case.
+- **Secrets never belong in Git.** Tracked templates contain placeholders;
+  credentials and runtime state stay outside the repository.
 
-For humans reviewing or adapting the setup, start here.
+For agent-guided setup and operation, use `SKILL.md`.
 
 This repository is a sanitized deployment template, not a copy of a live
 production VPS configuration.
