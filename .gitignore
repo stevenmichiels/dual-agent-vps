@@ -11,3 +11,4 @@ templates/infra/.terraform/
 id_*
 *.backup.tar.gz
 *.tar.gz
+.handoffs/
