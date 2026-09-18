@@ -53,6 +53,9 @@ Hetzner VPS
 The controller holds deployment intent and private local configuration. The VPS
 holds runtime state, private services, timers, and backups. Terraform owns the
 server and firewall shape; Ansible owns host configuration and service layout.
+The included operator CLI is named `hermes-vps`; this historical runtime name
+is retained for compatibility with existing commands, timers, paths, and
+automation.
 See [Private Integrations](docs/integrations.md) for the detailed directory and
 service boundaries.
 

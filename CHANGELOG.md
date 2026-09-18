@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## v1.0.2 - 2026-09-18
+
+v1.0.2 is a documentation-architecture patch that turns the README into a
+focused project overview while keeping operational depth in task-specific
+guides.
+
+- Reduce the README from 692 lines to a scan-friendly overview centered on the
+  motivation, engineering decisions, architecture, capabilities, quick start,
+  recovery model, security model, and optional components.
+- Move detailed access, operations, n8n/Cloudflare, integration, remote-desktop,
+  and dual-agent review guidance into focused documents under `docs/`.
+- Expand `SECURITY.md` with the threat model, non-negotiable boundaries, secret
+  handling, supply-chain decisions, and pre-sharing checks.
+- Use conservative recovery wording, explain why the included operator CLI
+  retains the historical `hermes-vps` name, and keep ordinary OpenSSH over
+  Tailscale distinct from the optional Tailscale SSH mode.
+
+Validation:
+
+- Local Markdown link validation for `README.md`, `SECURITY.md`, and `docs/*.md`
+- `git diff --check`
+- `terraform -chdir=templates/infra fmt -check -diff`
+- `terraform -chdir=templates/infra init -backend=false -input=false -lockfile=readonly`
+- `terraform -chdir=templates/infra validate`
+- `ansible-playbook -i inventory.ini.example site.yml --syntax-check`
+- Public-clean scan for tracked deployment state and secret-like assignments
+
 ## v1.0.1 - 2026-05-31
 
 v1.0.1 is a documentation and operator-guidance patch for the v1.0.0 private
