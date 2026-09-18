@@ -13,7 +13,10 @@ The main engineering goal is simple: if the VPS disappears tomorrow, I should
 be able to rebuild it predictably and understand exactly what is exposed,
 persisted, and backed up.
 
-## What I Learned / Engineering Decisions
+This repository is a sanitized deployment template, not a copy of a live VPS.
+For agent-guided setup and operation, use [SKILL.md](SKILL.md).
+
+## Engineering Decisions
 
 - **Terraform owns infrastructure; Ansible owns host configuration.** Keeping
   that boundary explicit makes changes easier to review and recovery easier to
@@ -27,451 +30,63 @@ persisted, and backed up.
 - **Secrets never belong in Git.** Tracked templates contain placeholders;
   credentials and runtime state stay outside the repository.
 
-For agent-guided setup and operation, use `SKILL.md`.
-
-This repository is a sanitized deployment template, not a copy of a live
-production VPS configuration.
-
-## Recommended First Path
-
-Start with the private headless workbench and add optional services only when
-you need them:
-
-1. Provision the VPS with Terraform.
-2. Apply the base Ansible hardening.
-3. Verify SSH/Tailscale access, create the first `hermes-vps backup`, then run
-   `hermes-vps status`.
-4. Add Codex/Claude helpers, Firecrawl, n8n, an agent gateway, or NoMachine only
-   when needed.
-5. Expose only production webhooks through Cloudflare Tunnel.
-
-## Current Readiness Model
-
-The intended production-ready n8n posture is public-webhook-only: Cloudflare
-Tunnel may expose a hostname for production webhook traffic, but only
-`/webhook/*` should reach loopback-bound n8n. The editor, REST API, sign-in
-routes, SSH, raw VPS ports, and SQLite database stay private behind
-SSH/Tailscale and host-local paths.
-
-The backup chain is designed as a closed loop: n8n SQLite is backed up online,
-included in age-encrypted VPS backup artifacts, copied off-box with
-rsync-over-SSH, verified end-to-end with SHA-256, and only then allowed to
-reenable local retention pruning. Restore is not just documented; the runbook
-includes isolated checks for database integrity and decrypted n8n credentials
-without printing secret values.
-
-`hermes-vps status` is the operator-facing source of truth. It checks the
-workbench backup state, off-box freshness, prune gate, optional n8n HTTP health,
-optional n8n container state, and optional `cloudflared` service state, with
-Telegram health alerts loaded from `/etc/hermes-vps/.env` for drift detection.
-
-See `CHANGELOG.md` and the
-[v1.0.0 release notes](https://github.com/stevenmichiels/dual-agent-vps/releases/tag/v1.0.0)
-for the deployment-ready workbench baseline. The
-[v0.4.0 release notes](https://github.com/stevenmichiels/dual-agent-vps/releases/tag/v0.4.0)
-remain the public-webhook/private-editor n8n milestone.
-
-## Before You Fork or Use This
-
-- Read `SKILL.md` before running Terraform or Ansible.
-- Review every Terraform plan before applying it.
-- Keep local inventory, Terraform variables, state, plans, logs, SSH keys,
-  OAuth files, bot tokens, and runtime env files out of Git.
-- Set `bootstrap_public_ssh_cidr` to your current public `/32` before first
-  public SSH bootstrap. The template default is empty so Ansible fails before
-  UFW if you forget.
-- Confirm the SSH exposure model matches your current access path before
-  enabling UFW or changing Hetzner firewall rules.
-- Treat remote install scripts and floating optional service images as
-  supply-chain decisions to review, not invisible defaults.
-
-## Design Goals
-
-- Private by default: narrow bootstrap SSH, then OpenSSH restricted to the Tailscale network.
-- Hardened base setup with firewalling and basic intrusion protection.
-- Reviewable infrastructure through Terraform and Ansible.
-- Optional app gateway/dashboard ports bound to loopback unless public exposure is explicitly accepted.
-- Optional private Firecrawl stack with private Docker-network wiring for app
-  integrations.
-- Optional private n8n stack bound to loopback or a Tailscale address.
-- Optional Cloudflare Tunnel ingress for n8n `/webhook/` only, without opening
-  public `80`, `443`, or `5678` on the VPS.
-- Optional NoMachine/XFCE remote desktop restricted to the Tailscale access boundary.
-- Separated VPS zones for live app runtimes, staging, operator repos, agent
-  workspaces, service installs, and backups.
-- VPS operator commands live in their own role and do not require any optional
-  app to be installed.
-- One-command status checks for health, backups, off-box freshness, guarded
-  pruning, releases, Docker cleanup, timers, optional n8n, and optional
-  Cloudflare Tunnel.
-- Optional rsync-over-SSH off-box backup verification gate before local
-  retention pruning is re-enabled.
-- Recoverable VPS model with encrypted backups and a restore path that proves
-  n8n database integrity plus credential decryption in isolation.
-
-## Architecture Overview
+## Architecture
 
 ```text
 Controller machine
 |-- Terraform -> Hetzner server + firewall
-|-- Ansible   -> VPS hardening + Docker + vps_ops + optional service roles
-`-- Local ignored config
+|-- Ansible   -> hardening, Docker, operator tools, optional services
+`-- ignored local config
     |-- templates/infra/terraform.tfvars
     |-- templates/ansible/inventory.ini
     `-- templates/ansible/vars/local.yml
 
 Hetzner VPS
-|-- OpenSSH for operators, restricted to the Tailscale network
-|-- optional NoMachine/XFCE desktop over Tailscale
-|-- hermes-vps operator commands, backups, health checks, and timers
-|-- optional agent gateway container
-|-- optional agent gateway state under /var/lib/hermes
-|-- optional private Firecrawl stack
-|-- optional private n8n stack
-|-- optional cloudflared tunnel for n8n /webhook/ only
-|-- optional encrypted off-box backup target verification
+|-- OpenSSH restricted to the Tailscale network
 |-- /home/<admin_user>/repos and agent-workspaces
-`-- /var/backups/hermes-vps backups
+|-- /srv/apps for staged and production application zones
+|-- /opt and /var/lib for optional service runtimes
+|-- hermes-vps health, backup, release, and cleanup commands
+`-- /var/backups/hermes-vps
 ```
 
-The controller keeps deployment intent and private local config. The VPS keeps
-runtime state, loopback-bound services, timers, and backups. Terraform owns the
-server/firewall shape; Ansible owns host configuration and service layout.
-
-## Why This Exists
-
-Running AI agents and private automation from a VPS is not just "start a
-container". The useful part is the operational wrapper around it: safe access,
-repeatable rebuilds, private secrets, health checks, backups, and a clear
-recovery path when the VPS disappears or the runtime changes.
-
-This skill turns that into a reusable workflow. It gives an agent enough
-structure to provision the box, harden it, add optional automation services,
-and verify that the result is actually usable.
-
-## Why This Matters for AI Agents
-
-AI agents become more useful when they operate inside a stable, recoverable
-environment with explicit boundaries. This skill gives the agent a safe
-operating envelope: private access, reproducible infrastructure, documented
-secret handling, health checks, backups, and recovery steps.
-
-The goal is not to let an agent mutate a production box freely. The goal is to
-give agents a reliable workbench where infrastructure changes are explicit,
-reviewable, and reversible.
-
-## Added Value
-
-- Repeatable infrastructure instead of click-by-click server setup.
-- SSH guardrails: narrow bootstrap access first, then OpenSSH restricted to the Tailscale network.
-- Private-by-default service binds for optional app gateway/dashboard, Firecrawl API,
-  and n8n.
-- Secret-safe runtime setup with placeholder env templates and explicit "do not commit" rules.
-- One-command operator checks through `hermes-vps status`, including optional
-  n8n health/container and `cloudflared` service checks when those services
-  are enabled.
-- Scheduled backups, Docker cleanup, stable release checks, and health transition alerts.
-- Restore runbook for a fresh VPS rebuild from backup, including isolated n8n
-  SQLite and credential-decrypt proof steps.
-- Source-controlled optional app runtime skill templates, including a private Firecrawl workflow skill.
-- Managed parent directories for co-hosting Claude Code CLI, Codex CLI, OpenClaw,
-  repos, app runtimes, and backups without mixing them into one
-  root-owned workspace.
-- Local config examples so the public skill can stay generic while private
-  machine/account values stay ignored.
-
-## Cloudflare Tunnel Quickstart
-
-For the n8n public-webhook/private-editor pattern, use a locally managed
-Cloudflare Tunnel. You do not need a Cloudflare API token for this path.
-
-Prerequisites:
-
-- The parent domain is already added to Cloudflare and using Cloudflare
-  nameservers.
-- You have picked a public hostname such as `n8n.example.com`.
-- `cloudflared` is installed on the controller for login and tunnel creation.
-
-Controller-side setup:
-
-```bash
-brew install cloudflared
-cloudflared tunnel login
-cloudflared tunnel create hermes-n8n
-cloudflared tunnel route dns hermes-n8n n8n.example.com
-cloudflared tunnel list
-```
-
-Keep controller `cert.pem` on the controller. Copy only the generated
-`~/.cloudflared/<tunnel-uuid>.json` tunnel credentials file to the VPS path
-configured by `cloudflared_credentials_file`. Add local agent deny/exclude rules
-for `~/.cloudflared/cert.pem` and `~/.cloudflared/*.json` before login. See
-`templates/ansible/roles/cloudflared/README.md` for the full staged runbook.
-
-## What This Is Not
-
-This is not a hosted service, a turnkey SaaS product, or a substitute for
-reading Terraform/Ansible plans before applying them. It is an opinionated
-deployment skill with guardrails, intended for operators who are comfortable
-reviewing infrastructure changes.
-
-## Threat Model and Assumptions
-
-This template assumes:
-
-- A single-operator or small trusted-admin VPS, not a multi-tenant host.
-- A trusted controller machine for Terraform and Ansible runs.
-- A trusted Tailscale tailnet for ongoing OpenSSH access.
-- Loopback-bound optional service ports unless public exposure is explicitly accepted.
-- Optional remote desktop access through NoMachine over Tailscale, not public GUI ports.
-- Secret-bearing runtime files remain on the controller or VPS and are never committed.
-- Backups are private artifacts and should be encrypted when copied off the VPS.
-
-This template does not try to protect against a compromised controller machine,
-malicious Terraform/Ansible operator, compromised upstream image, hostile
-tailnet member with admin privileges, or intentional public exposure of private
-services.
-
-## Supply Chain Notes
-
-- The optional agent gateway Docker image is pinned to an explicit release tag by
-  default. Do not switch it to `latest` unless you intentionally accept
-  floating runtime behavior.
-- Optional Firecrawl image variables default to upstream `latest` tags because
-  Firecrawl's self-host stack can move across multiple coordinated images. Pin
-  them in `templates/ansible/vars/local.yml` before production use if you need
-  reproducible rollouts.
-- Optional n8n defaults to a digest-pinned Docker image and refuses to start
-  until `N8N_ENCRYPTION_KEY` is set in `/etc/n8n/.env` on the VPS.
-- Optional Cloudflare Tunnel support assumes a locally managed tunnel and
-  credentials JSON created by the operator. The template does not store
-  tunnel tokens or credentials in Git.
-- The base role uses upstream remote install scripts for Tailscale and Claude
-  CLI. Optional Codex CLI support installs Node/npm packages from the configured
-  OS/npm registries plus the distro `bubblewrap` package for Linux sandboxing.
-  Review those tasks before use, pin or replace them if your environment
-  requires stricter supply-chain controls, and rerun syntax checks after
-  changes.
-- Terraform provider versions are locked in `templates/infra/.terraform.lock.hcl`;
-  keep lockfile changes reviewable.
+The controller holds deployment intent and private local configuration. The VPS
+holds runtime state, private services, timers, and backups. Terraform owns the
+server and firewall shape; Ansible owns host configuration and service layout.
+See [Private Integrations](docs/integrations.md) for the detailed directory and
+service boundaries.
 
 ## What It Includes
 
-- Terraform templates for Hetzner server and firewall setup.
-- Ansible roles for base hardening, UFW/fail2ban, Docker, `vps_ops` operator
-  commands/backups/health checks/timers, optional agent gateway, optional
-  NoMachine/XFCE remote desktop, optional Firecrawl, and optional n8n.
-- Source-controlled optional app runtime skill templates under `templates/hermes-skills/`.
-- Source-controlled Codex and Claude skill templates under
-  `templates/codex-skills/` and `templates/claude-skills/`.
-- A restore runbook in `references/restore.md`, including n8n encrypted
-  SQLite restore checks and a disposable credential-decrypt probe.
-- Release notes in `CHANGELOG.md`.
-- Example config files for local deployment values.
+- Hetzner VPS and firewall provisioning with Terraform.
+- Host hardening, UFW, fail2ban, Docker, and Tailscale-aware access with Ansible.
+- Separated zones for applications, repositories, agent workspaces, services,
+  and backups.
+- `hermes-vps` commands for health, backups, off-box verification, timers,
+  release checks, alerts, and Docker cleanup.
+- Encrypted n8n backups and a documented, verifiable recovery path.
+- Optional private n8n, Firecrawl, Windmill, agent gateway, and remote desktop
+  profiles.
+- Source-controlled Codex, Claude, and runtime skill templates.
 
-## VPS Layout
+## Quick Start
 
-The playbook manages parent directories for a single VPS that can act as an
-agent workbench without mixing live apps, staging, repos, and service runtimes
-into one shared root-owned directory.
+Start with the private headless workbench. Add optional services only after the
+base host, Tailscale access, backups, and health checks are working.
 
-Default managed parent zones:
-
-```text
-/srv/apps
-/home/<admin_user>/repos
-/home/<admin_user>/agent-workspaces
-/opt/openclaw
-/opt/hermes
-/opt/firecrawl
-/etc/firecrawl
-/var/lib/n8n
-/etc/n8n
-/var/backups
-```
-
-Suggested concrete layout once real app and repo names are known:
-
-```text
-/srv/apps/production-site
-/srv/apps/staging-site
-/home/<admin_user>/repos/project
-/home/<admin_user>/agent-workspaces/claude-code
-/home/<admin_user>/agent-workspaces/codex-cli
-/opt/openclaw
-/opt/hermes
-/opt/firecrawl
-/var/lib/n8n
-/var/backups
-```
-
-Firecrawl is an optional private service zone, not a subdirectory of another
-app profile. Its API can be attached to the app Docker network for private
-in-container calls through the `firecrawl` alias; its compose file and env live
-under `/opt/firecrawl` and `/etc/firecrawl`.
-
-Codex CLI can also use the private Firecrawl service from the VPS host through
-`http://127.0.0.1:3002`. The preferred integration is a user-local Codex MCP
-entry:
-
-```sh
-codex mcp add firecrawl --env FIRECRAWL_API_URL=http://127.0.0.1:3002 -- npx -y firecrawl-mcp
-```
-
-n8n is an optional private service zone, not a public webhook endpoint by
-default. Its compose file and env live under `/etc/n8n`, persistent data lives
-under `/var/lib/n8n`, and access is through an SSH tunnel or an explicit
-Tailscale bind until a separate reverse-proxy/TLS design is reviewed.
-
-For public n8n production webhooks, prefer the optional Cloudflare Tunnel path:
-keep n8n loopback-bound, route only `^/webhook/` to
-`http://127.0.0.1:5678`, keep the editor/API private, and leave public VPS
-`80`, `443`, and `5678` closed. Temporary routes such as `/webhook-test/` or
-`/rest/oauth2-credential/callback` should be enabled only for setup windows and
-then removed.
-
-This writes to the operator's `~/.codex/config.toml`; treat it as local account
-state, not a tracked deployment secret. Validate with `codex mcp list` and an
-interactive Codex prompt that uses the `firecrawl` MCP server. Keep Firecrawl
-loopback-bound unless public exposure is explicitly reviewed and accepted.
-
-For LangChain, LangGraph, and LangSmith documentation lookups from Codex CLI,
-add the official hosted docs MCP server as user-local Codex state:
-
-```sh
-codex mcp add langchain-docs --url https://docs.langchain.com/mcp
-```
-
-If the `codex mcp add` subcommand is not available, add the equivalent
-`~/.codex/config.toml` entry:
-
-```toml
-[mcp_servers.langchain-docs]
-url = "https://docs.langchain.com/mcp"
-```
-
-Prefer this official docs MCP for documentation lookups. Do not install
-third-party LangChain code-search MCP packages unless their login and credit
-model has been explicitly accepted.
-
-## Optional Remote Desktop
-
-The default workbench is headless. A desktop adds packages, memory pressure,
-and local session surface, so enable it only when you need an actual GUI.
-
-The supported opt-in profile installs XFCE plus NoMachine. Keep it private by
-connecting only over Tailscale:
-
-In ignored `templates/ansible/vars/local.yml`:
-
-```yaml
-install_remote_desktop: true
-install_nomachine: true
-```
-
-Then rerun Ansible after OpenSSH over Tailscale is already stable. NoMachine is a
-proprietary free-for-personal-use package; keep that supply-chain decision
-explicit when enabling this profile.
-
-The playbook installs the official Linux amd64 DEB, verifies the vendor MD5,
-disables NoMachine UPnP/NAT-PMP port mapping, writes
-`/home/<admin_user>/.nx/config/authorized.crt` from `admin_authorized_keys`,
-disables NoMachine automatic firewall changes, removes installer-created public
-UFW rules, requires NX private-key authentication, and allows TCP/UDP `4000`
-only from the Tailscale CIDR. NoMachine virtual desktops are forced to start
-XFCE with `/etc/X11/Xsession startxfce4`.
-
-In the NoMachine client on macOS:
-
-1. Add a new connection.
-2. Host: VPS Tailscale IP or MagicDNS hostname.
-3. Protocol: `NX`.
-4. Port: `4000`.
-5. Authentication: key-based/private key.
-6. Username: the non-root admin user.
-7. Private key: the key matching an `admin_authorized_keys` entry.
-8. If NoMachine says it cannot detect a display, choose **Yes** to let it
-   create a new virtual display. On a VPS this is expected. You can also enable
-   "Always create a new display on this server" for this connection.
-
-Concrete connection values look like this:
-
-```text
-Protocol: NX
-Host: <vps-tailscale-ip-or-magicdns-name>
-Port: 4000
-Username: <admin_user>
-Authentication: Private key
-Private key: ~/.ssh/<key-listed-in-admin_authorized_keys>
-```
-
-For the current local deployment, use the ignored `inventory.ini` and
-`vars/local.yml` files as the source of truth for `Host`, `Username`, and the
-controller SSH key path. Do not copy those private values into the public repo.
-
-Do not sign in to NoMachine Network/cloud for this VPS. Use the direct
-Tailscale IP/hostname connection.
-
-Resource guidance:
-
-- Minimum for light desktop use: 2 vCPU / 4 GB RAM.
-- Preferred for browsers, IDEs, and agent tools: 4 vCPU / 8 GB RAM or more.
-- Avoid public GUI ports. Keep access on Tailscale and validate UFW plus the
-  Hetzner firewall after enabling the profile.
-
-Claude Code CLI and Codex CLI are treated as interactive coding tools for Git
-repos or disposable workspaces. They should not write directly to production
-runtime directories, production env files, or production databases. Use Git,
-reviewed diffs, CI/deploy scripts, Ansible, or a staging promotion step for
-live changes.
-
-For second opinions, keep one agent as the implementer and the other as a
-read-only reviewer. The base role installs the `claude-review` Codex skill into
-the operator's `~/.codex/skills` and exposes `codex-claude-review`, which lets
-Codex ask Claude Code to review the current `git diff HEAD` plus untracked
-files, include recent `.codex/plan/*.md` context, and write a Markdown report
-without giving Claude edit tools. This makes review workflows explicit and
-auditable instead of relying on an agent that both changes and judges the same
-code:
-
-```sh
-codex-claude-review "Review the current diff as a strict senior engineer."
-codex-claude-review -o claude-review.md "Check whether this is overengineered."
-```
-
-The base role also installs the reverse `codex-review` Claude skill into the
-operator's `~/.claude/skills` and exposes `claude-codex-review`, which lets
-Claude ask Codex CLI for a read-only review through Codex's native
-`codex review` command:
-
-```sh
-claude-codex-review "Review the current diff as a strict senior engineer."
-claude-codex-review --commit HEAD -o codex-review.md
-claude-codex-review --base main "Review this branch against main."
-```
-
-The helpers never stage or commit. If a review report should be versioned,
-inspect it first and commit only the Markdown report separately.
-
-## Prerequisites
+### Prerequisites
 
 You need:
 
-- Terraform
-- Ansible
-- A Hetzner Cloud account and API token
-- SSH access from your local machine for bootstrap
-- Optional: Tailscale, strongly recommended for private ongoing SSH access
-- Optional: Telegram gateway integration for the optional agent gateway
-- Optional: Firecrawl, if you enable private scrape/crawl/PDF extraction workflows
-- Optional: n8n, if you enable private workflow automation experiments
-- Optional: Cloudflare Tunnel, if you expose n8n production webhooks while
-  keeping the editor/API private
-- Optional: NoMachine client, if you enable the remote desktop profile
+- Terraform and Ansible on a trusted controller machine;
+- a Hetzner Cloud account and API token;
+- an SSH key and your current public `/32` for bootstrap; and
+- a Tailscale account for ongoing private access.
 
-## First-Time Setup
+Cloudflare, NoMachine, Telegram, and optional service credentials are needed
+only when their corresponding profiles are enabled.
 
-Copy the example files and fill in your local values:
+### Create Local Configuration
 
 ```sh
 cp templates/ansible/inventory.ini.example templates/ansible/inventory.ini
@@ -479,18 +94,12 @@ cp templates/ansible/vars/local.yml.example templates/ansible/vars/local.yml
 cp templates/infra/terraform.tfvars.example templates/infra/terraform.tfvars
 ```
 
-Example values are intentionally generic. Replace them with your own values locally and keep the resulting files private.
+Replace the examples locally. These files are ignored because they may contain
+hostnames, addresses, account details, or deployment-specific settings. Keep
+provider tokens, bot tokens, OAuth state, runtime env files, backups, and SSH
+keys out of Git. See [SECURITY.md](SECURITY.md).
 
-Keep real secrets and private deployment details out of committed files.
-Provider tokens and bot/API keys belong in secure shell/env storage or on the
-VPS in `/var/lib/hermes/.env`, `/etc/firecrawl/firecrawl.env`, and
-`/etc/n8n/.env`. Do not include runtime env files in logs or support bundles.
-When backups include runtime env files, keep them encrypted or confined to a
-trusted off-box target.
-
-## Safe Review Path
-
-You can review the template without creating or changing cloud resources:
+### Review Without Changing Infrastructure
 
 ```sh
 terraform -chdir=templates/infra fmt -check -diff
@@ -501,192 +110,112 @@ cd templates/ansible
 ansible-playbook -i inventory.ini.example site.yml --syntax-check
 ```
 
-This checks formatting, Terraform schema validity, and Ansible syntax without
-contacting Hetzner or a live VPS. A real deployment still requires private local
-config files, credentials, an inspected Terraform plan, and an explicit apply.
+These checks validate formatting, Terraform configuration, and Ansible syntax
+without contacting Hetzner or a live VPS.
 
-## Typical Flow
+### Deploy
 
-1. Copy the example config files.
-2. Add local deployment values.
-3. Run `terraform plan` locally and review it.
-4. Run `terraform apply` locally only if the plan matches your intent.
-5. Update the Ansible inventory with the bootstrap VPS IP first, then the Tailscale hostname/IP after private access is enabled.
-6. Run the Ansible playbook locally against the VPS.
-7. Optional: configure agent gateway runtime secrets on the VPS.
-8. Optional: enable the agent gateway service through Ansible.
-9. Verify the deployment on the VPS with `hermes-vps status`.
-10. Verify timers for backups, Docker cleanup, release checks, and health checks.
-11. Optional: enable NoMachine/XFCE remote desktop only after OpenSSH over Tailscale is stable.
-12. Optional: enable Firecrawl and validate the private network alias with `hermes-vps status`.
-13. Optional: enable n8n only after setting `N8N_ENCRYPTION_KEY` and
-    `N8N_USER_MANAGEMENT_JWT_SECRET` on the VPS, then access it through an SSH
-    tunnel or Tailscale bind.
-14. Optional: enable Cloudflare Tunnel for n8n production webhooks only after
-    the locally managed tunnel and credentials file exist on the VPS.
-15. Optional: configure VPS backup off-box transport with
-    `hermes_backup_offbox_enabled` and `hermes_backup_offbox_target` only after
-    the remote rsync-over-SSH target and credentials are ready.
+1. Set Terraform variables and restrict bootstrap SSH to your current public
+   `/32`.
+2. Run `terraform plan` and inspect every change.
+3. Apply only when the plan matches the intended server and firewall shape.
+4. Point the Ansible inventory at the bootstrap IP and apply the base playbook.
+5. Prove non-root SSH works before disabling root login.
+6. Join the VPS to Tailscale and prove ordinary OpenSSH works over its Tailscale
+   IP or MagicDNS name.
+7. Remove the public bootstrap CIDR from UFW and the Hetzner firewall.
+8. Create the first backup, check timers, and run the status command.
+9. Enable optional services one at a time and validate each private boundary.
 
-## Recovery Model
+Do not apply a Terraform plan that unexpectedly replaces an existing VPS. The
+exact staged procedure and configuration gates live in [SKILL.md](SKILL.md).
 
-The VPS is treated as replaceable infrastructure. Persistent state should live
-in backups, Git remotes, or explicitly documented storage paths.
+### Verify the Workbench
 
-Local backup retention pruning runs only while off-box transport is enabled and
-the verified state file is fresh. Until then, `hermes-vps status` warns with
-`backup_retention_prune_disabled_until_offbox_copy` and, when applicable,
-`backup_offbox_disabled`.
-
-For a personal setup, a Mac on the same Tailscale network is a valid off-box
-target when it receives the already encrypted artifacts via rsync over SSH.
-If that target is unavailable, the backup command keeps the local archive and
-writes an off-box retry-pending marker so the next run can retry before local
-retention pruning is restored.
-
-If the VPS is lost, the expected recovery path is:
-
-1. Recreate infrastructure with Terraform.
-2. Re-run Ansible.
-3. Restore optional app state from backup.
-4. Re-check health, timers, gateway access, and optional service access.
-
-## Local Files You Must Not Share
-
-Do not commit or share:
-
-- `templates/ansible/inventory.ini`
-- `templates/ansible/vars/local.yml`
-- `templates/infra/terraform.tfvars`
-- `templates/infra/terraform.tfstate*`
-- `templates/infra/tfplan*`
-- `templates/infra/.terraform/`
-- `templates/ansible/ansible-run.log`
-- backup archives, OAuth profiles, pairing state, runtime env files, or SSH keys
-
-These should be ignored by `.gitignore` in this repo. Verify before committing.
-
-## Basic Commands
-
-Terraform commands run locally from this repository. Always inspect the Terraform plan before applying it:
+Run on the VPS:
 
 ```sh
-terraform -chdir=templates/infra init
-terraform -chdir=templates/infra plan
-terraform -chdir=templates/infra apply
-```
-
-Ansible commands run locally and target the VPS:
-
-```sh
-cd templates/ansible
-ansible-playbook -i inventory.ini site.yml
-```
-
-The `hermes-vps ...` operator commands run on the VPS after deployment:
-
-```sh
-hermes-vps status
-hermes-vps timers
-hermes-vps release-check
-hermes-vps healthcheck
-hermes-vps backup
-hermes-vps backup-offbox
-hermes-vps docker-cleanup
-```
-
-## Optional Ubuntu Pro / ESM Apps
-
-Ubuntu Pro / ESM Apps is an optional manual host-maintenance step for personal
-VPS hosts. It can provide extra security updates for installed
-Universe/Multiverse packages such as Docker, GitHub CLI, ffmpeg, and Python
-packaging tools. Do not put the Ubuntu Pro token in Ansible vars, Terraform
-vars, committed files, support bundles, screenshots, or chat logs.
-
-Recommended VPS-side flow:
-
-```sh
-sudo hermes-vps status
 sudo hermes-vps backup
-
-read -rsp "Ubuntu Pro token: " UBUNTU_PRO_TOKEN; echo
-sudo pro attach "$UBUNTU_PRO_TOKEN"
-unset UBUNTU_PRO_TOKEN
-
-pro status
-sudo apt update
-sudo apt upgrade
-pro security-status --esm-apps
 sudo hermes-vps status
-sudo hermes-vps healthcheck
-
-if [ -f /var/run/reboot-required ]; then cat /var/run/reboot-required; else echo no; fi
+sudo hermes-vps timers
 ```
 
-Reboot only when `/var/run/reboot-required` exists, then rerun
-`sudo hermes-vps status` and `sudo hermes-vps healthcheck`. If a Pro token is
-pasted into chat, screenshots, logs, or support artifacts, revoke or rotate it
-in the Ubuntu Pro dashboard.
+The default access model is OpenSSH over Tailscale, with Tailscale SSH itself
+disabled unless deliberately selected. See [Private Access](docs/access.md) for
+the transition and Termius setup.
 
-## Termius Access
+## Recovery and Operations
 
-Do not open public SSH just for Termius. Use normal OpenSSH over the Tailscale
-network:
+The VPS is treated as replaceable infrastructure. Terraform rebuilds the cloud
+resources, Ansible rebuilds host configuration, and explicit backups restore
+persistent service state.
 
-- Install and connect Tailscale on the Termius device.
-- Add a Termius host with the VPS Tailscale IP or MagicDNS name.
-- Use port `22`.
-- Use the non-root admin user configured in `templates/ansible/vars/local.yml`.
-- Authenticate with the private key matching `admin_authorized_keys`.
+Local retention pruning remains disabled until an off-box archive has been
+copied and checksum-verified. Recovery includes an isolated n8n database and
+credential-decryption test without printing secret values.
 
-The default private access model for this skill is OpenSSH over the Tailscale
-network. Keep Tailscale itself connected, but leave Tailscale SSH disabled
-unless you deliberately choose that separate access model:
+Read [Operations and Recovery](docs/operations.md) and the detailed
+[restore runbook](references/restore.md).
 
-```sh
-sudo tailscale set --ssh=false
+## Security Model
+
+The steady-state model is private by default: OpenSSH is limited to Tailscale,
+service ports bind to loopback or a Tailscale address, and public ingress is a
+separate design decision. The template assumes a trusted controller and a
+single operator or small trusted-admin group; it is not a multi-tenant hosting
+platform.
+
+Read [SECURITY.md](SECURITY.md) for the threat model, secret boundaries, supply
+chain notes, and pre-sharing checks.
+
+## Optional Components
+
+- **n8n and public webhooks:** private editor plus narrowly routed Cloudflare
+  Tunnel ingress. [Guide](docs/n8n-cloudflare.md)
+- **Firecrawl and MCP integrations:** private host/container endpoints and
+  user-local Codex configuration. [Guide](docs/integrations.md)
+- **Windmill:** private workflow automation backed by Postgres.
+  [Role guide](templates/ansible/roles/windmill/README.md)
+- **NoMachine/XFCE:** opt-in GUI access restricted to Tailscale.
+  [Guide](docs/remote-desktop.md)
+- **Codex/Claude cross-review:** one agent implements while the other reviews
+  without edit tools. [Guide](docs/agent-workflows.md)
+- **Agent gateway:** optional containerized runtime with state isolated under
+  `/var/lib/hermes`; see [SKILL.md](SKILL.md) for enablement and validation.
+
+## Repository Structure
+
+```text
+.
+|-- SKILL.md                  agent-facing operating procedure
+|-- SECURITY.md               threat model and secret boundaries
+|-- CHANGELOG.md              release history
+|-- docs/                     human-facing guides
+|-- references/restore.md     detailed recovery runbook
+`-- templates/
+    |-- infra/                Terraform server and firewall templates
+    |-- ansible/              playbook, roles, and example local config
+    |-- codex-skills/         Codex review skill templates
+    |-- claude-skills/        Claude review skill templates
+    `-- hermes-skills/        optional runtime skill templates
 ```
 
-If Tailscale SSH is enabled on the VPS, it may intercept port `22` before
-OpenSSH sees `authorized_keys`, causing Termius to hang on `Authenticating`.
-For Termius, keep Tailscale connected but disable the SSH intercept.
+## Documentation
 
-UFW and the Hetzner firewall should still keep SSH private to the Tailscale
-network.
+- [Private Access](docs/access.md)
+- [Operations and Recovery](docs/operations.md)
+- [n8n and Cloudflare Tunnel](docs/n8n-cloudflare.md)
+- [Private Integrations](docs/integrations.md)
+- [Remote Desktop](docs/remote-desktop.md)
+- [Agent Workflows](docs/agent-workflows.md)
 
-For a phone or tablet, prefer a device-specific key:
+## What This Is Not
 
-1. Create a new Ed25519 key inside Termius.
-2. Copy only the public key.
-3. Add that public key as a separate `admin_authorized_keys` entry in ignored
-   `templates/ansible/vars/local.yml`.
-4. Rerun Ansible from the controller.
-5. Connect Termius to the VPS Tailscale IP/hostname as the non-root admin user
-   on port `22`.
+This is not a hosted service, a turnkey SaaS product, or a substitute for
+reviewing infrastructure plans and security boundaries. It is an opinionated
+deployment template for operators who want reproducible automation and are
+comfortable inspecting Terraform, Ansible, and runtime configuration.
 
-After adding the key, label it clearly, record its public-key fingerprint, and
-verify presence without printing all authorized keys:
+## License
 
-```sh
-ssh-keygen -l -f <(printf '%s\n' '<public-key>')
-grep -F '<public-key-body>' ~/.ssh/authorized_keys >/dev/null && echo present
-```
-
-It is normal for `authorized_keys` to contain multiple keys when both controller
-and phone/tablet access are enabled. After a successful login, rename the key in
-Termius to something clear such as `vps-phone`.
-
-Password login stays disabled. Do not copy VPS secrets, runtime env files,
-Terraform state, or backups into Termius.
-
-## Sharing Checklist
-
-Before sharing this skill:
-
-```sh
-git status --short --ignored .
-git grep -n -I -E 'BEGIN .*PRIVATE KEY|OPENAI_API_KEY=.+|ANTHROPIC_API_KEY=.+|GITHUB_TOKEN=.+|GH_TOKEN=.+|TELEGRAM_BOT_TOKEN=.+|SLACK_.*TOKEN=.+|API_SERVER_KEY=.+|FIRECRAWL.*KEY=.+|HCLOUD_TOKEN=.+' -- . || true
-git ls-files . | rg '(^|/)(inventory\.ini|terraform\.tfstate|terraform\.tfvars|tfplan|ansible-run\.log|local\.yml)$|\.terraform/' || true
-```
-
-The first command should show private deployment files only as ignored. The last two commands should not print real secrets or local deployment files. Add your own usernames, hostnames, account labels, and local path fragments to the grep before publishing publicly.
+Released under the [MIT License](LICENSE).
